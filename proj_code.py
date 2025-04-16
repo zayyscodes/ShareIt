@@ -1,86 +1,199 @@
 from tkinter import *
-from tkinter import filedialog
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 import socket
 import os
 import threading
 import requests
 from flask import Flask, request, send_file
+from werkzeug.serving import make_server
 
 PEERS = []
 
-DISCOVERY_SERVER = "127.0.0.1"  # Change this if running on another machine
+DISCOVERY_SERVER = "127.0.0.1"
 DISCOVERY_PORT = 5000
-PEER_PORT = 8001  # Change for different peers
+PEER_PORT = 8001
 
-root=Tk()
-root.title("ShareIt")
-root.geometry("450x560+500+200")
-root.configure(bg="#f4fdfe")
-root.resizable(False, False)
+FILES_DIR = "shared_files"
+os.makedirs(FILES_DIR, exist_ok=True)
 
-def select_file():
-    print()
+app = Flask(__name__)
 
-def sender():
-    print()
 
-def server():
-    print()
-    client()
+# ========== SERVER SETUP ==========
+def discovery_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("0.0.0.0", DISCOVERY_PORT))
+    server.listen(5)
+    print(f"Discovery Server Running on Port {DISCOVERY_PORT}")
 
-# CLIENT FUNCTION
+    while True:
+        conn, addr = server.accept()
+        threading.Thread(target=handle_client, args=(conn, addr)).start()
+
+
+def handle_client(conn, addr):
+    global PEERS
+    try:
+        while True:
+            data = conn.recv(1024).decode()
+            if not data:
+                break
+            if data == "GET_PEERS":
+                conn.send(str(PEERS).encode())
+            elif data.startswith("REGISTER"):
+                peer_address = data.split(" ")[1]
+                if peer_address not in PEERS:
+                    PEERS.append(peer_address)
+                conn.send(b"Registered")
+    except:
+        pass
+    conn.close()
+
+
+@app.route('/files', methods=['GET'])
+def list_files():
+    return {"files": os.listdir(FILES_DIR)}
+
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return {"error": "No file provided"}, 400
+    file = request.files['file']
+    file.save(os.path.join(FILES_DIR, file.filename))
+    return {"message": f"File '{file.filename}' uploaded successfully"}
+
+
+@app.route('/download/<filename>', methods=['GET'])
+def download_file(filename):
+    file_path = os.path.join(FILES_DIR, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path, as_attachment=True)
+    return {"error": "File not found"}, 404
+
+
+def start_flask_server():
+    make_server('0.0.0.0', PEER_PORT, app).serve_forever()
+
+
+def request_file_from_peer(peer, filename):
+    url = f"http://{peer}/download/{filename}"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(os.path.join(FILES_DIR, filename), 'wb') as f:
+                f.write(response.content)
+            log_message(f"✅ Downloaded '{filename}' from {peer}")
+        else:
+            log_message(f"❌ Failed to download '{filename}': {response.json()}")
+    except Exception:
+        log_message(f"❌ Could not connect to peer {peer}")
+
+
 def register_peer():
-    #   Registers this peer with the discovery server
     peer_address = f"127.0.0.1:{PEER_PORT}"
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
         s.send(f"REGISTER {peer_address}".encode())
         response = s.recv(1024).decode()
-        print(f"Discovery Server Response: {response}")
+        log_message(f"✅ Registered to discovery server")
         s.close()
     except:
-        print("Failed to connect to discovery server.")
+        log_message("❌ Could not connect to discovery server.")
 
-def client():
 
+def get_peer_list():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
+        s.send(b"GET_PEERS")
+        peers = s.recv(4096).decode()
+        s.close()
+        peers = eval(peers) if peers else []
+        log_message("Active Peers:\n" + "\n".join(peers) if peers else "No active peers.")
+        return peers
+    except:
+        log_message("❌ Failed to retrieve peer list.")
+        return []
+
+
+def upload_files():
+    file_path = filedialog.askopenfilename()
+    if file_path:
+        file_name = os.path.basename(file_path)
+        dest = os.path.join(FILES_DIR, file_name)
+        os.rename(file_path, dest)
+        log_message(f"📁 Uploaded: {file_name}")
+
+
+def download_file_gui():
+    peers = get_peer_list()
+    if not peers:
+        return
+    filename = filedialog.askstring("Download File", "Enter filename to download:")
+    if filename:
+        for peer in peers:
+            request_file_from_peer(peer, filename)
+
+
+def show_local_files():
+    files = os.listdir(FILES_DIR)
+    log_message("📂 Files:\n" + "\n".join(files) if files else "No files available.")
+
+
+def log_message(msg):
+    output_box.config(state=NORMAL)
+    output_box.insert(END, msg + '\n\n')
+    output_box.config(state=DISABLED)
+    output_box.see(END)
+
+
+def start_network():
+    # Start discovery + Flask server
+    threading.Thread(target=discovery_server, daemon=True).start()
+    threading.Thread(target=start_flask_server, daemon=True).start()
     register_peer()
-
-    # CLIENT WINDOW GUI
-    main=Toplevel(root)
-    main.title("Client")
-    main.geometry('450x560+500+200')
-    main.configure(bg='#f4fdfe')
-    main.resizable(False, False)
-    image_icon=PhotoImage(file="images/receive.png")
-    main.iconphoto(False, image_icon)
-    Label(main, text="OPTIONS", font=('Press Start 2P', 20, 'bold'), bg="#f4fdfe").place(x=20, y=30)
-    Frame(main, width=400, height=2, bg='#f3f5f6').place(x=25, y=80)
-    Button(main, text="VIEW AVALAIBLE FILES", width=30, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="#fff", command=select_file).place(x=110, y=70)
-    Button(main, text="UPLOAD A FILE", width=30, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="#fff", command=select_file).place(x=110, y=120)
-    Button(main, text="DOWNLOAD A FILE", width=30, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="#fff", command=select_file).place(x=110, y=170)
-    Button(main, text="VIEW LIST OF PEERS", width=30, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="#fff", command=select_file).place(x=110, y=220)
-    Button(main, text="EXIT", width=30, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="#fff", command=select_file).place(x=110, y=270)
+    log_message("🌐 Network started.")
 
 
+# ========== MAIN GUI ==========
+root = Tk()
+root.title("ShareIt")
+root.geometry("500x650+500+150")
+root.configure(bg="#f4fdfe")
+root.resizable(False, False)
 
-    main.mainloop()
-
-#icon
-image_icon=PhotoImage(file="images/icon.png")
+image_icon = PhotoImage(file="images/icon.png")
 root.iconphoto(False, image_icon)
 
-Label(root, text="P2P FILE TRANSFER", font=('Press Start 2P', 15, 'bold'), bg="#f4fdfe").place(x=50, y=30)
-Frame(root, width=400, height=2, bg='#f3f5f6').place(x=25, y=80)
+Label(root, text="P2P FILE TRANSFER", font=('Press Start 2P', 13, 'bold'), bg="#f4fdfe").pack(pady=20)
+Frame(root, width=400, height=2, bg='#f3f5f6').pack()
 
-Button(root, text="START", width=10, height=2, font=('Press Start 2P', 10, 'bold'), bg="dark turquoise", fg="#fff", command=server).place(x=150, y=70)
+Button(root, text="START NETWORK", width=25, height=2, font=('Roboto', 10, 'bold'),
+       bg="dark turquoise", fg="white", command=start_network).pack(pady=10)
 
-background=PhotoImage(file="images/background.png")
-Label(root, image=background).place(x=-2, y=323)
+Button(root, text="VIEW LOCAL FILES", width=25, height=2, font=('Roboto', 10, 'bold'),
+       bg="blue violet", fg="white", command=show_local_files).pack(pady=5)
 
+Button(root, text="UPLOAD A FILE", width=25, height=2, font=('Roboto', 10, 'bold'),
+       bg="blue violet", fg="white", command=upload_files).pack(pady=5)
 
+Button(root, text="DOWNLOAD A FILE", width=25, height=2, font=('Roboto', 10, 'bold'),
+       bg="blue violet", fg="white", command=download_file_gui).pack(pady=5)
 
+Button(root, text="VIEW PEERS", width=25, height=2, font=('Roboto', 10, 'bold'),
+       bg="blue violet", fg="white", command=get_peer_list).pack(pady=5)
 
+Button(root, text="EXIT", width=25, height=2, font=('Roboto', 10, 'bold'),
+       bg="tomato", fg="white", command=root.destroy).pack(pady=5)
+
+Label(root, text="LOGS / OUTPUT", font=('Roboto', 12, 'bold'), bg="#f4fdfe").pack(pady=10)
+
+output_box = Text(root, height=12, width=60, font=('Consolas', 10), state=DISABLED, bg="#fff")
+output_box.pack(pady=5)
+
+background = PhotoImage(file="images/background.png")
+Label(root, image=background).pack(side="bottom", fill="x")
 
 root.mainloop()
