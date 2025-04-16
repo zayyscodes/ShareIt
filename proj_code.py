@@ -1,20 +1,24 @@
 from tkinter import *
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import socket
 import os
 import threading
 import requests
 from flask import Flask, request, send_file
-from werkzeug.serving import make_server
+import random
+import tkinter.simpledialog as simpledialog
 
 PEERS = []
 
 DISCOVERY_SERVER = "127.0.0.1"
 DISCOVERY_PORT = 5000
-PEER_PORT = 8001
+PEER_PORT = random.randint(8001, 8999)  
 
 FILES_DIR = "shared_files"
 os.makedirs(FILES_DIR, exist_ok=True)
+
+DOWNLOAD_DIR = "downloaded"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__)
 
@@ -29,6 +33,7 @@ def discovery_server():
     while True:
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr)).start()
+
 
 
 def handle_client(conn, addr):
@@ -73,7 +78,7 @@ def download_file(filename):
 
 
 def start_flask_server():
-    make_server('0.0.0.0', PEER_PORT, app).serve_forever()
+    app.run(host='0.0.0.0', port=PEER_PORT)
 
 
 def request_file_from_peer(peer, filename):
@@ -81,13 +86,14 @@ def request_file_from_peer(peer, filename):
     try:
         response = requests.get(url)
         if response.status_code == 200:
-            with open(os.path.join(FILES_DIR, filename), 'wb') as f:
+            with open(os.path.join(DOWNLOAD_DIR, filename), 'wb') as f:
                 f.write(response.content)
-            log_message(f"✅ Downloaded '{filename}' from {peer}")
+            log_message(f"[DOWNLOADED] '{filename}' from {peer} to '{DOWNLOAD_DIR}' folder")
         else:
-            log_message(f"❌ Failed to download '{filename}': {response.json()}")
+            log_message(f"[ERROR] Failed to download '{filename}': {response.json()}")
     except Exception:
-        log_message(f"❌ Could not connect to peer {peer}")
+        log_message(f"[ERROR] Could not connect to peer {peer}")
+
 
 
 def register_peer():
@@ -97,10 +103,10 @@ def register_peer():
         s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
         s.send(f"REGISTER {peer_address}".encode())
         response = s.recv(1024).decode()
-        log_message(f"✅ Registered to discovery server")
+        log_message(f"[SUCCESS] Registered to discovery server")
         s.close()
     except:
-        log_message("❌ Could not connect to discovery server.")
+        log_message("[ERROR] Could not connect to discovery server.")
 
 
 def get_peer_list():
@@ -111,10 +117,10 @@ def get_peer_list():
         peers = s.recv(4096).decode()
         s.close()
         peers = eval(peers) if peers else []
-        log_message("Active Peers:\n" + "\n".join(peers) if peers else "No active peers.")
+        log_message("[RETRIEVED] Active Peers:\n" + "\n".join(peers) if peers else "No active peers.")
         return peers
     except:
-        log_message("❌ Failed to retrieve peer list.")
+        log_message("[ERROR] Failed to retrieve peer list.")
         return []
 
 
@@ -124,22 +130,47 @@ def upload_files():
         file_name = os.path.basename(file_path)
         dest = os.path.join(FILES_DIR, file_name)
         os.rename(file_path, dest)
-        log_message(f"📁 Uploaded: {file_name}")
+        log_message(f"[UPLOADED] {file_name}")
 
 
 def download_file_gui():
     peers = get_peer_list()
     if not peers:
         return
-    filename = filedialog.askstring("Download File", "Enter filename to download:")
-    if filename:
-        for peer in peers:
-            request_file_from_peer(peer, filename)
+    all_files = {}
 
+    for peer in peers:
+        try:
+            response = requests.get(f"http://{peer}/files")
+            if response.status_code == 200:
+                files = response.json().get("files", [])
+                all_files[peer] = files
+        except Exception:
+            continue
+
+    options = []
+    for peer, files in all_files.items():
+        for file in files:
+            options.append(f"{file} from {peer}")
+
+    if not options:
+        log_message("[NOT FOUND] No files found on peers.")
+        return
+
+    selected = simpledialog.askstring("Download", "Select file:\n" + "\n".join(f"{i+1}. {opt}" for i, opt in enumerate(options)))
+    if not selected:
+        return
+    try:
+        index = int(selected.split('.')[0]) - 1
+        peer_info = options[index]
+        filename, _, peer = peer_info.partition(" from ")
+        request_file_from_peer(peer, filename.strip())
+    except Exception as e:
+        log_message("[ERROR] Invalid selection.")
 
 def show_local_files():
     files = os.listdir(FILES_DIR)
-    log_message("📂 Files:\n" + "\n".join(files) if files else "No files available.")
+    log_message("[SUCCESS] Files:\n" + "\n".join(files) if files else "[NOT AVAILABLE] No files available.")
 
 
 def log_message(msg):
@@ -150,11 +181,9 @@ def log_message(msg):
 
 
 def start_network():
-    # Start discovery + Flask server
-    threading.Thread(target=discovery_server, daemon=True).start()
     threading.Thread(target=start_flask_server, daemon=True).start()
     register_peer()
-    log_message("🌐 Network started.")
+    log_message("[CLIENT STARTED] Peer server registered.")
 
 
 # ========== MAIN GUI ==========
@@ -164,36 +193,29 @@ root.geometry("500x650+500+150")
 root.configure(bg="#f4fdfe")
 root.resizable(False, False)
 
-image_icon = PhotoImage(file="images/icon.png")
+image_icon = PhotoImage(file="icon.png")
 root.iconphoto(False, image_icon)
 
 Label(root, text="P2P FILE TRANSFER", font=('Press Start 2P', 13, 'bold'), bg="#f4fdfe").pack(pady=20)
 Frame(root, width=400, height=2, bg='#f3f5f6').pack()
 
-Button(root, text="START NETWORK", width=25, height=2, font=('Roboto', 10, 'bold'),
-       bg="dark turquoise", fg="white", command=start_network).pack(pady=10)
+Button(root, text="START NETWORK", width=25, height=2, font=('Roboto', 10, 'bold'), bg="dark turquoise", fg="white", command=start_network).pack(pady=10)
 
-Button(root, text="VIEW LOCAL FILES", width=25, height=2, font=('Roboto', 10, 'bold'),
-       bg="blue violet", fg="white", command=show_local_files).pack(pady=5)
+Button(root, text="VIEW LOCAL FILES", width=25, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="white", command=show_local_files).pack(pady=5)
 
-Button(root, text="UPLOAD A FILE", width=25, height=2, font=('Roboto', 10, 'bold'),
-       bg="blue violet", fg="white", command=upload_files).pack(pady=5)
+Button(root, text="UPLOAD A FILE", width=25, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="white", command=upload_files).pack(pady=5)
 
-Button(root, text="DOWNLOAD A FILE", width=25, height=2, font=('Roboto', 10, 'bold'),
-       bg="blue violet", fg="white", command=download_file_gui).pack(pady=5)
+Button(root, text="DOWNLOAD A FILE", width=25, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="white", command=download_file_gui).pack(pady=5)
 
-Button(root, text="VIEW PEERS", width=25, height=2, font=('Roboto', 10, 'bold'),
-       bg="blue violet", fg="white", command=get_peer_list).pack(pady=5)
+Button(root, text="VIEW PEERS", width=25, height=2, font=('Roboto', 10, 'bold'), bg="blue violet", fg="white", command=get_peer_list).pack(pady=5)
 
-Button(root, text="EXIT", width=25, height=2, font=('Roboto', 10, 'bold'),
-       bg="tomato", fg="white", command=root.destroy).pack(pady=5)
+Button(root, text="EXIT", width=25, height=2, font=('Roboto', 10, 'bold'), bg="tomato", fg="white", command=root.destroy).pack(pady=5)
 
 Label(root, text="LOGS / OUTPUT", font=('Roboto', 12, 'bold'), bg="#f4fdfe").pack(pady=10)
 
 output_box = Text(root, height=12, width=60, font=('Consolas', 10), state=DISABLED, bg="#fff")
 output_box.pack(pady=5)
 
-background = PhotoImage(file="images/background.png")
-Label(root, image=background).pack(side="bottom", fill="x")
+threading.Thread(target=discovery_server, daemon=True).start()
 
 root.mainloop()
