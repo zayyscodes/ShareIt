@@ -42,7 +42,15 @@ def download_file(filename):
 
 # ========== NETWORKING LOGIC ==========
 def start_flask_server():
-    app.run(host='0.0.0.0', port=PEER_PORT)
+    global PEER_PORT
+    for _ in range(10):  # Try up to 10 ports
+        try:
+            app.run(host='0.0.0.0', port=PEER_PORT)
+            break
+        except OSError:  # Port in use
+            PEER_PORT = random.randint(8001, 8999)
+    else:
+        log_message("[ERROR] Could not start Flask server: All ports in use")
 
 def request_file_from_peer(peer, filename):
     url = f"http://{peer}/download/{filename}"
@@ -57,29 +65,29 @@ def request_file_from_peer(peer, filename):
     except Exception:
         log_message(f"[ERROR] Could not connect to peer {peer}")
 
-def register_peer():
-    def get_local_ip():
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-        except Exception:
-            local_ip = "127.0.0.1"  # Fallback
-        finally:
-            s.close()
-        return local_ip
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+    except Exception:
+        local_ip = "127.0.0.1"  # Fallback
+    finally:
+        s.close()
+    return local_ip
 
+def register_peer():
     peer_address = f"{get_local_ip()}:{PEER_PORT}"
     try:
-            log_message(f"[DEBUG] Registering peer: {peer_address}")
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
-            s.send(f"REGISTER {peer_address}".encode())
-            response = s.recv(1024).decode()
-            log_message(f"[SUCCESS] Registered with discovery server")
-            s.close()
+        log_message(f"[DEBUG] Registering peer: {peer_address}")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
+        s.send(f"REGISTER {peer_address}".encode())
+        response = s.recv(1024).decode()
+        log_message(f"[SUCCESS] Registered with discovery server")
+        s.close()
     except Exception as e:
-            log_message(f"[ERROR] Could not connect to discovery server.\nReason: {e}")
+        log_message(f"[ERROR] Could not connect to discovery server.\nReason: {e}")
 
 def get_peer_list():
     try:
@@ -91,14 +99,14 @@ def get_peer_list():
         peers = eval(peers) if peers else []
 
         # Filter out the current peer itself
-        self_address = f"127.0.0.1:{PEER_PORT}"
+        self_address = f"{get_local_ip()}:{PEER_PORT}"
         peers = [peer for peer in peers if peer != self_address]
 
         # Validate active peers
         valid_peers = []
         for peer in peers:
             try:
-                response = requests.get(f"http://{peer}/files", timeout=2)
+                response = requests.get(f"http://{peer}/files", timeout=5)
                 if response.status_code == 200:
                     valid_peers.append(peer)
             except:
@@ -178,7 +186,6 @@ def start_network():
     log_message("[CLIENT STARTED] Peer server running and registered.")
 
 # ========== GUI ==========
-
 root = Tk()
 root.title("ShareIt")
 root.geometry("500x650+500+150")
