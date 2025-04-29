@@ -8,7 +8,7 @@ from flask import Flask, request, send_file
 import random
 
 # ========= CONFIG ==========
-DISCOVERY_SERVER = "127.0.0.1"
+DISCOVERY_SERVER = "172.16.83.67"
 DISCOVERY_PORT = 5000
 PEER_PORT = random.randint(8001, 8999)
 
@@ -58,17 +58,28 @@ def request_file_from_peer(peer, filename):
         log_message(f"[ERROR] Could not connect to peer {peer}")
 
 def register_peer():
-    peer_address = f"127.0.0.1:{PEER_PORT}"
+    def get_local_ip():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        except Exception:
+            local_ip = "127.0.0.1"  # Fallback
+        finally:
+            s.close()
+        return local_ip
+
+    peer_address = f"{get_local_ip()}:{PEER_PORT}"
     try:
-        log_message(f"[DEBUG] Registering peer: {peer_address}")
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
-        s.send(f"REGISTER {peer_address}".encode())
-        response = s.recv(1024).decode()
-        log_message(f"[SUCCESS] Registered with discovery server")
-        s.close()
+            log_message(f"[DEBUG] Registering peer: {peer_address}")
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((DISCOVERY_SERVER, DISCOVERY_PORT))
+            s.send(f"REGISTER {peer_address}".encode())
+            response = s.recv(1024).decode()
+            log_message(f"[SUCCESS] Registered with discovery server")
+            s.close()
     except Exception as e:
-        log_message(f"[ERROR] Could not connect to discovery server.\nReason: {e}")
+            log_message(f"[ERROR] Could not connect to discovery server.\nReason: {e}")
 
 def get_peer_list():
     try:
